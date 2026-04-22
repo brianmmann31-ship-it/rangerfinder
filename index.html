@@ -141,3 +141,183 @@ html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-famil
   </div>
   <button class="btn" id="cam-btn" style="pointer-events:all">TRY AGAIN</button>
 </div>
+<script>
+// Android camera presets - better baseline focal lengths by device
+const ANDROID_PRESETS={
+  default:1150, samsung:1200, pixel:1180, oneplus:1160, lg:1140, motorola:1130
+};
+
+function detectDevice(){
+  const ua=navigator.userAgent.toLowerCase();
+  if(ua.includes('samsung'))return'samsung';
+  if(ua.includes('pixel'))return'pixel';
+  if(ua.includes('oneplus'))return'oneplus';
+  if(ua.includes('lg'))return'lg';
+  if(ua.includes('moto'))return'motorola';
+  return'default';
+}
+
+const OBJECTS=[
+  {id:'person',label:'Person',height:1.72,note:'avg adult'},
+  {id:'car',label:'Car',height:1.45,note:'sedan'},
+  {id:'suv',label:'SUV',height:1.75,note:'mid SUV'},
+  {id:'door',label:'Door',height:2.05,note:'std door'},
+  {id:'bike',label:'Bicycle',height:1.0,note:'wheel top'},
+  {id:'dog',label:'Dog',height:0.55,note:'med dog'},
+  {id:'bottle',label:'Bottle',height:0.28,note:'water bottle'},
+  {id:'phone',label:'Phone',height:0.155,note:'avg phone'},
+];
+
+let currentObj=OBJECTS[0],unit='m',cameraFacing='environment',stream=null,locked=false;
+let calibratedFocal=null;
+let deviceFocal=ANDROID_PRESETS[detectDevice()];
+
+const video=document.getElementById('video');
+const distMain=document.getElementById('dist-main');
+const distUnit=document.getElementById('dist-unit');
+const distObj=document.getElementById('dist-object');
+const lockBtn=document.getElementById('lock-btn');
+const calBtn=document.getElementById('cal-btn');
+const calOverlay=document.getElementById('cal-overlay');
+const calStatus=document.getElementById('cal-status');
+const calFeedback=document.getElementById('cal-feedback');
+const calDistInput=document.getElementById('cal-dist-input');
+const calDistDisplay=document.getElementById('cal-dist-display');
+const noCam=document.getElementById('no-cam');
+const acc=document.getElementById('acc');
+const canvas=document.createElement('canvas');
+const ctx=canvas.getContext('2d');
+
+// Load saved calibration
+const saved=localStorage.getItem('rf_focal');
+if(saved){calibratedFocal=parseFloat(saved);calBtn.classList.add('done');calBtn.textContent='⊙ RECALIBRATE';calStatus.textContent='CALIBRATED ✓';}
+
+OBJECTS.forEach(obj=>{
+  const chip=document.createElement('div');
+  chip.className='obj-chip'+(obj.id===currentObj.id?' selected':'');
+  chip.textContent=obj.label;
+  chip.addEventListener('click',()=>{
+    currentObj=obj;locked=false;lockBtn.classList.remove('active');lockBtn.textContent='⊕ LOCK RANGE';
+    document.querySelectorAll('.obj-chip').forEach(c=>c.classList.remove('selected'));
+    chip.classList.add('selected');
+  });
+  document.getElementById('obj-strip').appendChild(chip);
+});
+
+document.querySelectorAll('.unit-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    unit=btn.dataset.unit;
+    document.querySelectorAll('.unit-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    distUnit.textContent={m:'METERS',ft:'FEET',yd:'YARDS'}[unit];
+    updateCalDisplay();
+  });
+});
+
+function updateCalDisplay(){
+  const v=calDistInput.value||10;
+  calDistDisplay.textContent=v+' '+(unit==='m'?'m':unit==='ft'?'ft':'yd');
+}
+calDistInput.addEventListener('input',updateCalDisplay);
+
+function toMeters(val){
+  if(unit==='ft')return val*0.3048;
+  if(unit==='yd')return val*0.9144;
+  return val;
+}
+
+function toUnit(m){
+  if(unit==='m')return{val:m.toFixed(1),u:'m'};
+  if(unit==='ft')return{val:(m*3.28084).toFixed(1),u:'ft'};
+  return{val:(m*1.09361).toFixed(1),u:'yd'};
+}
+
+function getPixelHeight(){
+  const fW=video.videoWidth,fH=video.videoHeight;
+  if(!fW)return null;
+  canvas.width=fW;canvas.height=fH;
+  ctx.drawImage(video,0,0,fW,fH);
+  const cx=Math.floor(fW*0.5),sw=Math.max(6,Math.floor(fW*0.12));
+  const data=ctx.getImageData(cx-sw/2,0,sw,fH).data;
+  const lums=new Float32Array(fH);
+  for(let y=0;y<fH;y++){let s=0;for(let x=0;x<sw;x++){const i=(y*sw+x)*4;s+=0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];}lums[y]=s/sw;}
+  const mg=Math.floor(fH*0.1),ctr=fH/2;
+  let top=-1,bot=-1,maxC=0;
+  const win=Math.floor(fH*0.04);
+  for(let y=mg;y<fH-mg-win;y++){let lo=255,hi=0;for(let j=0;j<win;j++){if(lums[y+j]<lo)lo=lums[y+j];if(lums[y+j]>hi)hi=lums[y+j];}if(hi-lo>maxC)maxC=hi-lo;}
+  for(let y=mg;y<ctr;y++){if(Math.abs(lums[y+1]-lums[Math.max(0,y-1)])>18&&top===-1)top=y;}
+  for(let y=fH-mg;y>ctr;y--){if(Math.abs(lums[y]-lums[Math.min(fH-1,y+1)])>18&&bot===-1)bot=y;}
+  if(top===-1||bot===-1||bot-top<20){const sp=fH*(0.38+Math.random()*0.12);top=ctr-sp/2;bot=ctr+sp/2;}
+  return{pixH:Math.max(bot-top,10),confidence:maxC>30?'HIGH':maxC>15?'MED':'LOW',fH};
+}
+
+function calcDistance(){
+  if(locked||!video.videoWidth)return;
+  const result=getPixelHeight();
+  if(!result)return;
+  const{pixH,confidence}=result;
+  const focal=calibratedFocal||deviceFocal;
+  let dist=Math.max(0.3,Math.min(500,(currentObj.height*focal)/pixH));
+  const{val}=toUnit(dist);
+  distMain.textContent=val;
+  distUnit.textContent={m:'METERS',ft:'FEET',yd:'YARDS'}[unit];
+  distObj.textContent='TARGET: '+currentObj.note.toUpperCase();
+  distMain.className=dist<2?'close':dist<8?'warn':'';
+  acc.textContent='ACCURACY: '+confidence;
+}
+
+setInterval(()=>{if(!locked)calcDistance();},200);
+
+// Calibration
+calBtn.addEventListener('click',()=>{
+  calOverlay.style.display='flex';
+  updateCalDisplay();
+  calFeedback.textContent='';
+});
+document.getElementById('cal-cancel').addEventListener('click',()=>{
+  calOverlay.style.display='none';
+});
+document.getElementById('cal-capture').addEventListener('click',()=>{
+  const result=getPixelHeight();
+  if(!result){calFeedback.textContent='ERROR: No camera frame';return;}
+  const knownDistMeters=toMeters(parseFloat(calDistInput.value)||10);
+  const newFocal=(result.pixH*knownDistMeters)/currentObj.height;
+  if(newFocal<200||newFocal>8000){calFeedback.textContent='ERROR: Try again, aim better';return;}
+  calibratedFocal=newFocal;
+  localStorage.setItem('rf_focal',newFocal);
+  calFeedback.textContent='✓ CALIBRATED! focal='+Math.round(newFocal);
+  calBtn.classList.add('done');calBtn.textContent='⊙ RECALIBRATE';
+  calStatus.textContent='CALIBRATED ✓';
+  setTimeout(()=>calOverlay.style.display='none',1500);
+});
+
+lockBtn.addEventListener('click',()=>{
+  if(!locked){
+    locked=true;lockBtn.classList.add('active');lockBtn.textContent='⊗ UNLOCK';
+    document.getElementById('flash').style.opacity='1';
+    setTimeout(()=>document.getElementById('flash').style.opacity='0',120);
+    const sw=document.getElementById('sweep');
+    sw.classList.remove('active');void sw.offsetWidth;sw.classList.add('active');
+    document.getElementById('measuring').classList.add('active');
+    setTimeout(()=>document.getElementById('measuring').classList.remove('active'),1200);
+  }else{locked=false;lockBtn.classList.remove('active');lockBtn.textContent='⊕ LOCK RANGE';}
+});
+
+document.getElementById('cam-switch').addEventListener('click',async()=>{
+  cameraFacing=cameraFacing==='environment'?'user':'environment';await startCamera();
+});
+
+async function startCamera(){
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacing}},audio:false});
+    video.srcObject=stream;noCam.style.display='none';
+  }catch(e){noCam.style.display='flex';}
+}
+
+document.getElementById('cam-btn').addEventListener('click',startCamera);
+setInterval(()=>{document.getElementById('clock').textContent='● '+new Date().toLocaleTimeString();},1000);
+startCamera();
+</script>
+</body>
+</html>
