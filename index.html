@@ -95,16 +95,16 @@ html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-famil
   <div id="measuring">CALCULATING RANGE...</div>
   <div id="dist-panel">
     <div id="dist-main">---</div>
-    <div id="dist-unit">METERS</div>
-    <div id="dist-object">AIM AT OBJECT</div>
+    <div id="dist-unit">FEET</div>
+    <div id="dist-object">SELECT TARGET</div>
     <div id="cal-status"></div>
   </div>
   <div id="bottom-panel">
     <div id="status-bar"><span id="clock">● LIVE</span><span id="acc">ACCURACY: --</span></div>
     <div id="obj-strip"></div>
     <div id="unit-toggle">
-      <button class="unit-btn active" data-unit="m">METERS</button>
-      <button class="unit-btn" data-unit="ft">FEET</button>
+      <button class="unit-btn" data-unit="m">METERS</button>
+      <button class="unit-btn active" data-unit="ft">FEET</button>
       <button class="unit-btn" data-unit="yd">YARDS</button>
     </div>
     <div id="controls">
@@ -114,14 +114,12 @@ html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-famil
     </div>
   </div>
 </div>
-
-<!-- Calibration overlay -->
 <div id="cal-overlay">
   <h2>⊙ CALIBRATE</h2>
-  <p>Stand exactly this far from your selected object and tap CAPTURE</p>
+  <p>Stand exactly this far from your selected target and tap CAPTURE</p>
   <div class="big" id="cal-dist-display">10 ft</div>
   <p style="font-size:10px;color:rgba(0,255,136,0.4)">Change distance if needed:</p>
-  <input id="cal-dist-input" type="number" value="10" min="1" max="100" placeholder="10"/>
+  <input id="cal-dist-input" type="number" value="10" min="1" max="300" placeholder="10"/>
   <p style="font-size:9px;color:rgba(0,255,136,0.35)">Units match your current selection</p>
   <div class="row">
     <button class="btn" id="cal-capture">⊕ CAPTURE</button>
@@ -129,7 +127,6 @@ html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-famil
   </div>
   <p id="cal-feedback" style="font-size:10px;color:var(--amber);min-height:16px"></p>
 </div>
-
 <div id="no-cam">
   <h2>CAMERA ACCESS NEEDED</h2>
   <p>To allow camera access on Android Chrome:</p>
@@ -140,13 +137,10 @@ html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;font-famil
     4. Reload the page
   </div>
   <button class="btn" id="cam-btn" style="pointer-events:all">TRY AGAIN</button>
-</div>
-<script>
-// Android camera presets - better baseline focal lengths by device
+</div><script>
 const ANDROID_PRESETS={
-  default:1150, samsung:1200, pixel:1180, oneplus:1160, lg:1140, motorola:1130
+  default:1150,samsung:1200,pixel:1180,oneplus:1160,lg:1140,motorola:1130
 };
-
 function detectDevice(){
   const ua=navigator.userAgent.toLowerCase();
   if(ua.includes('samsung'))return'samsung';
@@ -158,17 +152,13 @@ function detectDevice(){
 }
 
 const OBJECTS=[
-  {id:'person',label:'Person',height:1.72,note:'avg adult'},
-  {id:'car',label:'Car',height:1.45,note:'sedan'},
-  {id:'suv',label:'SUV',height:1.75,note:'mid SUV'},
-  {id:'door',label:'Door',height:2.05,note:'std door'},
-  {id:'bike',label:'Bicycle',height:1.0,note:'wheel top'},
-  {id:'dog',label:'Dog',height:0.55,note:'med dog'},
-  {id:'bottle',label:'Bottle',height:0.28,note:'water bottle'},
-  {id:'phone',label:'Phone',height:0.155,note:'avg phone'},
+  {id:'ipsc',      label:'🎯 Range Target', height:0.762, note:'IPSC full size 30in'},
+  {id:'person',    label:'👤 Person',        height:1.72,  note:'avg adult 5ft8in'},
+  {id:'persontgt', label:'🧍 Person Target', height:0.914, note:'person silhouette 36in'},
+  {id:'mini',      label:'🎯 Mini Target',   height:0.203, note:'small target 8in'},
 ];
 
-let currentObj=OBJECTS[0],unit='m',cameraFacing='environment',stream=null,locked=false;
+let currentObj=OBJECTS[0],unit='ft',cameraFacing='environment',stream=null,locked=false;
 let calibratedFocal=null;
 let deviceFocal=ANDROID_PRESETS[detectDevice()];
 
@@ -188,16 +178,24 @@ const acc=document.getElementById('acc');
 const canvas=document.createElement('canvas');
 const ctx=canvas.getContext('2d');
 
-// Load saved calibration
 const saved=localStorage.getItem('rf_focal');
-if(saved){calibratedFocal=parseFloat(saved);calBtn.classList.add('done');calBtn.textContent='⊙ RECALIBRATE';calStatus.textContent='CALIBRATED ✓';}
+if(saved){
+  calibratedFocal=parseFloat(saved);
+  calBtn.classList.add('done');
+  calBtn.textContent='⊙ RECALIBRATE';
+  calStatus.textContent='CALIBRATED ✓';
+}
 
+// Build target chips
 OBJECTS.forEach(obj=>{
   const chip=document.createElement('div');
   chip.className='obj-chip'+(obj.id===currentObj.id?' selected':'');
   chip.textContent=obj.label;
   chip.addEventListener('click',()=>{
-    currentObj=obj;locked=false;lockBtn.classList.remove('active');lockBtn.textContent='⊕ LOCK RANGE';
+    currentObj=obj;
+    locked=false;
+    lockBtn.classList.remove('active');
+    lockBtn.textContent='⊕ LOCK RANGE';
     document.querySelectorAll('.obj-chip').forEach(c=>c.classList.remove('selected'));
     chip.classList.add('selected');
   });
@@ -223,13 +221,13 @@ calDistInput.addEventListener('input',updateCalDisplay);
 function toMeters(val){
   if(unit==='ft')return val*0.3048;
   if(unit==='yd')return val*0.9144;
-  return val;
+  return parseFloat(val);
 }
 
 function toUnit(m){
-  if(unit==='m')return{val:m.toFixed(1),u:'m'};
   if(unit==='ft')return{val:(m*3.28084).toFixed(1),u:'ft'};
-  return{val:(m*1.09361).toFixed(1),u:'yd'};
+  if(unit==='yd')return{val:(m*1.09361).toFixed(1),u:'yd'};
+  return{val:m.toFixed(1),u:'m'};
 }
 
 function getPixelHeight(){
@@ -240,15 +238,25 @@ function getPixelHeight(){
   const cx=Math.floor(fW*0.5),sw=Math.max(6,Math.floor(fW*0.12));
   const data=ctx.getImageData(cx-sw/2,0,sw,fH).data;
   const lums=new Float32Array(fH);
-  for(let y=0;y<fH;y++){let s=0;for(let x=0;x<sw;x++){const i=(y*sw+x)*4;s+=0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];}lums[y]=s/sw;}
+  for(let y=0;y<fH;y++){
+    let s=0;
+    for(let x=0;x<sw;x++){const i=(y*sw+x)*4;s+=0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];}
+    lums[y]=s/sw;
+  }
   const mg=Math.floor(fH*0.1),ctr=fH/2;
   let top=-1,bot=-1,maxC=0;
   const win=Math.floor(fH*0.04);
-  for(let y=mg;y<fH-mg-win;y++){let lo=255,hi=0;for(let j=0;j<win;j++){if(lums[y+j]<lo)lo=lums[y+j];if(lums[y+j]>hi)hi=lums[y+j];}if(hi-lo>maxC)maxC=hi-lo;}
+  for(let y=mg;y<fH-mg-win;y++){
+    let lo=255,hi=0;
+    for(let j=0;j<win;j++){if(lums[y+j]<lo)lo=lums[y+j];if(lums[y+j]>hi)hi=lums[y+j];}
+    if(hi-lo>maxC)maxC=hi-lo;
+  }
   for(let y=mg;y<ctr;y++){if(Math.abs(lums[y+1]-lums[Math.max(0,y-1)])>18&&top===-1)top=y;}
   for(let y=fH-mg;y>ctr;y--){if(Math.abs(lums[y]-lums[Math.min(fH-1,y+1)])>18&&bot===-1)bot=y;}
-  if(top===-1||bot===-1||bot-top<20){const sp=fH*(0.38+Math.random()*0.12);top=ctr-sp/2;bot=ctr+sp/2;}
-  return{pixH:Math.max(bot-top,10),confidence:maxC>30?'HIGH':maxC>15?'MED':'LOW',fH};
+  if(top===-1||bot===-1||bot-top<20){
+    const sp=fH*(0.38+Math.random()*0.12);top=ctr-sp/2;bot=ctr+sp/2;
+  }
+  return{pixH:Math.max(bot-top,10),confidence:maxC>30?'HIGH':maxC>15?'MED':'LOW'};
 }
 
 function calcDistance(){
@@ -257,18 +265,17 @@ function calcDistance(){
   if(!result)return;
   const{pixH,confidence}=result;
   const focal=calibratedFocal||deviceFocal;
-  let dist=Math.max(0.3,Math.min(500,(currentObj.height*focal)/pixH));
+  let dist=Math.max(0.3,Math.min(1000,(currentObj.height*focal)/pixH));
   const{val}=toUnit(dist);
   distMain.textContent=val;
   distUnit.textContent={m:'METERS',ft:'FEET',yd:'YARDS'}[unit];
   distObj.textContent='TARGET: '+currentObj.note.toUpperCase();
-  distMain.className=dist<2?'close':dist<8?'warn':'';
+  distMain.className=dist<2?'close':dist<15?'warn':'';
   acc.textContent='ACCURACY: '+confidence;
 }
 
 setInterval(()=>{if(!locked)calcDistance();},200);
 
-// Calibration
 calBtn.addEventListener('click',()=>{
   calOverlay.style.display='flex';
   updateCalDisplay();
@@ -286,7 +293,8 @@ document.getElementById('cal-capture').addEventListener('click',()=>{
   calibratedFocal=newFocal;
   localStorage.setItem('rf_focal',newFocal);
   calFeedback.textContent='✓ CALIBRATED! focal='+Math.round(newFocal);
-  calBtn.classList.add('done');calBtn.textContent='⊙ RECALIBRATE';
+  calBtn.classList.add('done');
+  calBtn.textContent='⊙ RECALIBRATE';
   calStatus.textContent='CALIBRATED ✓';
   setTimeout(()=>calOverlay.style.display='none',1500);
 });
@@ -300,23 +308,32 @@ lockBtn.addEventListener('click',()=>{
     sw.classList.remove('active');void sw.offsetWidth;sw.classList.add('active');
     document.getElementById('measuring').classList.add('active');
     setTimeout(()=>document.getElementById('measuring').classList.remove('active'),1200);
-  }else{locked=false;lockBtn.classList.remove('active');lockBtn.textContent='⊕ LOCK RANGE';}
+  }else{
+    locked=false;lockBtn.classList.remove('active');lockBtn.textContent='⊕ LOCK RANGE';
+  }
 });
 
 document.getElementById('cam-switch').addEventListener('click',async()=>{
-  cameraFacing=cameraFacing==='environment'?'user':'environment';await startCamera();
+  cameraFacing=cameraFacing==='environment'?'user':'environment';
+  await startCamera();
 });
 
 async function startCamera(){
   if(stream)stream.getTracks().forEach(t=>t.stop());
   try{
     stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:cameraFacing}},audio:false});
-    video.srcObject=stream;noCam.style.display='none';
+    video.srcObject=stream;
+    noCam.style.display='none';
   }catch(e){noCam.style.display='flex';}
 }
 
 document.getElementById('cam-btn').addEventListener('click',startCamera);
 setInterval(()=>{document.getElementById('clock').textContent='● '+new Date().toLocaleTimeString();},1000);
+
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
+
 startCamera();
 </script>
 </body>
